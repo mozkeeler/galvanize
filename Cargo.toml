@@ -1,0 +1,8 @@
+[package]
+name = "galvanize"
+version = "0.1.0"
+authors = ["Dana Keeler <mozkeeler@gmail.com>"]
+
+[dependencies]
+getopts = "0.2"
+ring = "0.6"
