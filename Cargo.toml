@@ -5,4 +5,4 @@ authors = ["Dana Keeler <mozkeeler@gmail.com>"]
 
 [dependencies]
 getopts = "0.2"
-ring = "0.6"
+ring = "0.14.6"
