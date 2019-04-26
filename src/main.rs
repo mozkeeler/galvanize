@@ -20,8 +20,13 @@ fn print_usage(program: &str, opts: Options) {
 
 fn derive_key(password: &str, key_out: &mut [u8]) {
     let salt = vec![0u8; 0];
-    pbkdf2::derive(&digest::SHA256, NonZeroU32::new(1000).unwrap(), &salt, password.as_bytes(),
-                   key_out);
+    pbkdf2::derive(
+        &digest::SHA256,
+        NonZeroU32::new(1000).unwrap(),
+        &salt,
+        password.as_bytes(),
+        key_out,
+    );
 }
 
 fn read_stdin(buffer: &mut Vec<u8>) {
@@ -55,8 +60,13 @@ fn encrypt(key: &[u8], data: &mut Vec<u8>) -> usize {
     write_bytes(&nonce);
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
     let seal_key = aead::SealingKey::new(&aead::AES_256_GCM, key).unwrap();
-    let out_len = match aead::seal_in_place(&seal_key, nonce, aead::Aad::empty(), data,
-                                            aead::MAX_TAG_LEN) {
+    let out_len = match aead::seal_in_place(
+        &seal_key,
+        nonce,
+        aead::Aad::empty(),
+        data,
+        aead::MAX_TAG_LEN,
+    ) {
         Ok(out_len) => out_len,
         Err(e) => {
             eprintln!("{}", e.to_string());
@@ -73,10 +83,10 @@ fn decrypt_from_stdin(key: &[u8]) {
     write_bytes(out);
 }
 
-fn decrypt<'a>(key: &[u8], data: &'a mut Vec<u8>) -> &'a[u8] {
+fn decrypt<'a>(key: &[u8], data: &'a mut Vec<u8>) -> &'a [u8] {
     let mut nonce = [0u8; aead::NONCE_LEN];
     for i in 0..NONCE_LEN {
-      nonce[i] = data[i];
+        nonce[i] = data[i];
     }
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
     let open_key = aead::OpeningKey::new(&aead::AES_256_GCM, key).unwrap();
