@@ -14,9 +14,8 @@ use std::process;
 
 // Adapted from https://doc.rust-lang.org/getopts/getopts/index.html
 fn print_usage(program: &str, opts: Options) {
-    let mut stderr = std::io::stderr();
     let brief = format!("Usage: {} <-e|-d> -p password", program);
-    write!(&mut stderr, "{}", opts.usage(&brief)).unwrap();
+    eprint!("{}", opts.usage(&brief));
 }
 
 fn derive_key(password: &str, key_out: &mut [u8]) {
@@ -39,9 +38,14 @@ fn write_bytes(data: &[u8]) {
 
 const NONCE_LEN: usize = 96 / 8;
 
-fn encrypt(key: &[u8]) {
+fn encrypt_from_stdin(key: &[u8]) {
     let mut data = Vec::new();
     read_stdin(&mut data);
+    let out_len = encrypt(key, &mut data);
+    write_bytes(&data[..out_len]);
+}
+
+fn encrypt(key: &[u8], data: &mut Vec<u8>) -> usize {
     for _ in 0..aead::MAX_TAG_LEN {
         data.push(0);
     }
@@ -51,37 +55,39 @@ fn encrypt(key: &[u8]) {
     write_bytes(&nonce);
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
     let seal_key = aead::SealingKey::new(&aead::AES_256_GCM, key).unwrap();
-    let out_len = match aead::seal_in_place(&seal_key, nonce, aead::Aad::empty(), &mut data,
+    let out_len = match aead::seal_in_place(&seal_key, nonce, aead::Aad::empty(), data,
                                             aead::MAX_TAG_LEN) {
         Ok(out_len) => out_len,
         Err(e) => {
-            let mut stderr = std::io::stderr();
-            writeln!(&mut stderr, "{}", e.to_string()).unwrap();
+            eprintln!("{}", e.to_string());
             process::exit(1);
         }
     };
-    write_bytes(&data[..out_len]);
+    out_len
 }
 
-fn decrypt(key: &[u8]) {
+fn decrypt_from_stdin(key: &[u8]) {
     let mut data = Vec::new();
     read_stdin(&mut data);
+    let out = decrypt(key, &mut data);
+    write_bytes(out);
+}
+
+fn decrypt<'a>(key: &[u8], data: &'a mut Vec<u8>) -> &'a[u8] {
     let mut nonce = [0u8; aead::NONCE_LEN];
     for i in 0..NONCE_LEN {
       nonce[i] = data[i];
     }
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
     let open_key = aead::OpeningKey::new(&aead::AES_256_GCM, key).unwrap();
-    let out = match aead::open_in_place(&open_key, nonce, aead::Aad::empty(), NONCE_LEN,
-                                        &mut data) {
+    let out = match aead::open_in_place(&open_key, nonce, aead::Aad::empty(), NONCE_LEN, data) {
         Ok(out) => out,
         Err(e) => {
-            let mut stderr = std::io::stderr();
-            writeln!(&mut stderr, "{}", e.to_string()).unwrap();
+            eprintln!("{}", e.to_string());
             process::exit(1);
         }
     };
-    write_bytes(out);
+    out
 }
 
 fn main() {
@@ -96,8 +102,7 @@ fn main() {
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(e) => {
-            let mut stderr = std::io::stderr();
-            writeln!(&mut stderr, "{}", e.to_string()).unwrap();
+            eprintln!("{}", e.to_string());
             print_usage(&program, opts);
             process::exit(1);
         }
@@ -110,21 +115,20 @@ fn main() {
 
     let encrypt_specified = matches.opt_present("e");
     let decrypt_specified = matches.opt_present("d");
-    let mut stderr = std::io::stderr();
     if encrypt_specified && decrypt_specified {
-        writeln!(&mut stderr, "Can't specify both encrypt and decrypt.").unwrap();
+        eprintln!("Can't specify both encrypt and decrypt.");
         print_usage(&program, opts);
         return;
     }
 
     if !encrypt_specified && !decrypt_specified {
-        writeln!(&mut stderr, "Either encrypt or decrypt must be specified.").unwrap();
+        eprintln!("Either encrypt or decrypt must be specified.");
         print_usage(&program, opts);
         return;
     }
 
     if !matches.opt_present("p") {
-        writeln!(&mut stderr, "Must specify password.").unwrap();
+        eprintln!("Must specify password.");
         print_usage(&program, opts);
         return;
     }
@@ -134,8 +138,8 @@ fn main() {
     derive_key(password.as_str(), &mut key);
 
     if encrypt_specified {
-        encrypt(&key);
+        encrypt_from_stdin(&key);
     } else {
-        decrypt(&key);
+        decrypt_from_stdin(&key);
     }
 }
