@@ -1,155 +1,91 @@
-extern crate getopts;
 extern crate ring;
 
-use getopts::Options;
-use ring::aead;
-use ring::digest;
-use ring::pbkdf2;
-use ring::rand;
 use ring::rand::SecureRandom;
-use std::env;
-use std::io::prelude::*;
+use ring::{aead, digest, error, pbkdf2, rand};
 use std::num::NonZeroU32;
-use std::process;
 
-// Adapted from https://doc.rust-lang.org/getopts/getopts/index.html
-fn print_usage(program: &str, opts: Options) {
-    let brief = format!("Usage: {} <-e|-d> -p password", program);
-    eprint!("{}", opts.usage(&brief));
-}
-
-fn derive_key(password: &str, key_out: &mut [u8]) {
-    let salt = vec![0u8; 0];
-    pbkdf2::derive(
-        &digest::SHA256,
-        NonZeroU32::new(1000).unwrap(),
-        &salt,
-        password.as_bytes(),
-        key_out,
-    );
-}
-
-fn read_stdin(buffer: &mut Vec<u8>) {
-    let stdin = std::io::stdin();
-    for byte in stdin.bytes() {
-        buffer.push(byte.unwrap());
-    }
-}
-
-fn write_bytes(data: &[u8]) {
-    let mut stdout = std::io::stdout();
-    assert!(stdout.write_all(data).is_ok());
-}
-
-const NONCE_LEN: usize = 96 / 8;
-
-fn encrypt_from_stdin(key: &[u8]) {
-    let mut data = Vec::new();
-    read_stdin(&mut data);
-    let out_len = encrypt(key, &mut data);
-    write_bytes(&data[..out_len]);
-}
-
-fn encrypt(key: &[u8], data: &mut Vec<u8>) -> usize {
+fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, error::Unspecified> {
+    let mut in_out = plaintext.to_owned();
     for _ in 0..aead::MAX_TAG_LEN {
-        data.push(0);
+        in_out.push(0);
     }
     let mut nonce = [0u8; aead::NONCE_LEN];
     let rng = rand::SystemRandom::new();
-    assert!(rng.fill(&mut nonce).is_ok());
-    write_bytes(&nonce);
+    rng.fill(&mut nonce)?;
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
-    let seal_key = aead::SealingKey::new(&aead::AES_256_GCM, key).unwrap();
-    let out_len = match aead::seal_in_place(
+    let mut ciphertext = Vec::with_capacity(aead::NONCE_LEN + plaintext.len() + aead::MAX_TAG_LEN);
+    ciphertext.extend_from_slice(nonce.as_ref());
+    let seal_key = aead::SealingKey::new(&aead::AES_256_GCM, key)?;
+    let out_len = aead::seal_in_place(
         &seal_key,
         nonce,
         aead::Aad::empty(),
-        data,
+        &mut in_out,
         aead::MAX_TAG_LEN,
-    ) {
-        Ok(out_len) => out_len,
-        Err(e) => {
-            eprintln!("{}", e.to_string());
-            process::exit(1);
-        }
-    };
-    out_len
+    )?;
+    ciphertext.extend_from_slice(&in_out[..out_len]);
+    Ok(ciphertext)
 }
 
-fn decrypt_from_stdin(key: &[u8]) {
-    let mut data = Vec::new();
-    read_stdin(&mut data);
-    let out = decrypt(key, &mut data);
-    write_bytes(out);
-}
-
-fn decrypt<'a>(key: &[u8], data: &'a mut Vec<u8>) -> &'a [u8] {
+fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, error::Unspecified> {
+    let mut ciphertext = ciphertext.to_owned();
     let mut nonce = [0u8; aead::NONCE_LEN];
-    for i in 0..NONCE_LEN {
-        nonce[i] = data[i];
+    for i in 0..aead::NONCE_LEN {
+        nonce[i] = ciphertext[i];
     }
     let nonce = aead::Nonce::assume_unique_for_key(nonce);
-    let open_key = aead::OpeningKey::new(&aead::AES_256_GCM, key).unwrap();
-    let out = match aead::open_in_place(&open_key, nonce, aead::Aad::empty(), NONCE_LEN, data) {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("{}", e.to_string());
-            process::exit(1);
-        }
-    };
-    out
+    let open_key = aead::OpeningKey::new(&aead::AES_256_GCM, key)?;
+    let out = aead::open_in_place(
+        &open_key,
+        nonce,
+        aead::Aad::empty(),
+        aead::NONCE_LEN,
+        &mut ciphertext,
+    )?;
+    let mut plaintext = Vec::with_capacity(out.len());
+    plaintext.extend_from_slice(out);
+    Ok(plaintext)
+}
+
+fn password_to_key(password: &str) -> Result<[u8; digest::SHA256_OUTPUT_LEN], error::Unspecified> {
+    let mut key = [0u8; digest::SHA256_OUTPUT_LEN];
+    let salt = vec![0u8; 0];
+    pbkdf2::derive(
+        &digest::SHA256,
+        NonZeroU32::new(1000).ok_or(error::Unspecified {})?,
+        &salt,
+        password.as_bytes(),
+        &mut key,
+    );
+    Ok(key)
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
+    println!("hello, world");
+}
 
-    let mut opts = Options::new();
-    opts.optflag("e", "encrypt", "encrypt stdin to stdout");
-    opts.optflag("d", "decrypt", "decrypt stdin to stdout");
-    opts.optflag("h", "help", "print this help message");
-    opts.optopt("p", "password", "what password to use (with PBKDF2)", "");
-    let matches = match opts.parse(&args[1..]) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("{}", e.to_string());
-            print_usage(&program, opts);
-            process::exit(1);
-        }
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if matches.opt_present("h") {
-        print_usage(&program, opts);
-        return;
+    #[test]
+    fn test_encrypt_decrypt() {
+        let key = [0xbbu8; digest::SHA256_OUTPUT_LEN];
+        let plaintext = "arm not alas sand, way south in the west".as_bytes();
+        let ciphertext = encrypt(&key, &plaintext).expect("encrypt should succeed");
+        let ciphertext_decrypted = decrypt(&key, &ciphertext).expect("decrypt should succeed");
+        assert_eq!(ciphertext_decrypted, plaintext);
     }
 
-    let encrypt_specified = matches.opt_present("e");
-    let decrypt_specified = matches.opt_present("d");
-    if encrypt_specified && decrypt_specified {
-        eprintln!("Can't specify both encrypt and decrypt.");
-        print_usage(&program, opts);
-        return;
-    }
-
-    if !encrypt_specified && !decrypt_specified {
-        eprintln!("Either encrypt or decrypt must be specified.");
-        print_usage(&program, opts);
-        return;
-    }
-
-    if !matches.opt_present("p") {
-        eprintln!("Must specify password.");
-        print_usage(&program, opts);
-        return;
-    }
-
-    let password = matches.opt_str("p").unwrap();
-    let mut key = vec![0u8; digest::SHA256.output_len];
-    derive_key(password.as_str(), &mut key);
-
-    if encrypt_specified {
-        encrypt_from_stdin(&key);
-    } else {
-        decrypt_from_stdin(&key);
+    #[test]
+    fn test_password_to_key() {
+        let password = "salamandastron";
+        let key = password_to_key(&password).expect("password_to_key should succeed");
+        let expected_key = [
+            0x6a, 0xf0, 0xe7, 0x90, 0x53, 0xbf, 0xa, 0xbd, 0xaf, 0x73, 0xf7, 0xb6, 0xde, 0x70,
+            0x9f, 0xfc, 0x88, 0x3, 0x2e, 0xcd, 0x20, 0xd5, 0x5a, 0x59, 0xcc, 0x1c, 0xee, 0x48,
+            0xab, 0x9, 0xfd, 0x16,
+        ];
+        assert_eq!(key, expected_key);
     }
 }
