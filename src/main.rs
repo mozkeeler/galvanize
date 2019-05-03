@@ -5,7 +5,7 @@ use ring::rand::SecureRandom;
 use ring::{aead, digest, error, pbkdf2, rand};
 use std::env;
 use std::fs::{remove_file, rename, File};
-use std::io::{stdin, Error, ErrorKind, Read, Write};
+use std::io::{stdin, stdout, Error, ErrorKind, Read, Write};
 use std::num::NonZeroU32;
 
 fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, error::Unspecified> {
@@ -80,6 +80,7 @@ fn read_file(filename: &str) -> Result<Vec<u8>, Error> {
 enum Action {
     List,
     New,
+    Delete,
     Save,
     Quit,
     Unknown(String),
@@ -91,6 +92,8 @@ impl Action {
             Action::List
         } else if description.eq_ignore_ascii_case("N") {
             Action::New
+        } else if description.eq_ignore_ascii_case("D") {
+            Action::Delete
         } else if description.eq_ignore_ascii_case("S") {
             Action::Save
         } else if description.eq_ignore_ascii_case("Q") {
@@ -111,14 +114,33 @@ fn add_entry(entries: &mut Vec<String>) -> Result<(), Error> {
     Ok(entries.push(prompt("New entry")?))
 }
 
+fn select_and_delete_entry(entries: &mut Vec<String>) -> Result<(), Error> {
+    let choice = prompt("Index")?;
+    let index = match choice.parse::<usize>() {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("couldn't parse '{}': '{}'", choice, e);
+            return Ok(());
+        }
+    };
+    if index >= entries.len() {
+        eprintln!("index '{}' out of range", index);
+        return Ok(());
+    }
+    let entry = entries.remove(index);
+    println!("removed '{}'", entry);
+    Ok(())
+}
+
 fn prompt_for_action() -> Result<Action, Error> {
     Ok(Action::from_description(prompt(
-        "(L)ist (N)ew (S)ave (Q)uit?",
+        "(L)ist (N)ew (D)elete (S)ave (Q)uit?",
     )?))
 }
 
 fn prompt(prompt_string: &str) -> Result<String, Error> {
-    println!("{}", prompt_string);
+    print!("{}: ", prompt_string);
+    stdout().flush()?;
     let mut input = String::new();
     let _ = stdin().read_line(&mut input)?;
     input
@@ -147,7 +169,7 @@ fn save_entries(
         let decrypted =
             decrypt(key, &new_db_contents).map_err(|e| Error::new(ErrorKind::Other, e))?;
         if decrypted != serialized.as_bytes() {
-            println!("something went wrong saving new contents - reverting to original");
+            eprintln!("something went wrong saving new contents - reverting to original");
             rename(&backup_filename, db_filename)?;
         } else {
             remove_file(backup_filename)?;
@@ -175,12 +197,13 @@ fn main() -> Result<(), Error> {
         match prompt_for_action()? {
             Action::List => list_entries(&entries),
             Action::New => add_entry(&mut entries)?,
+            Action::Delete => select_and_delete_entry(&mut entries)?,
             Action::Save => save_entries(&entries, &key, &db_filename)?,
             Action::Quit => {
                 println!("quitting...");
                 break;
             }
-            Action::Unknown(value) => println!("Unknown: {}", value),
+            Action::Unknown(value) => eprintln!("Unknown: {}", value),
         }
     }
     Ok(())
