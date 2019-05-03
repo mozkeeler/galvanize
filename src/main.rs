@@ -4,8 +4,8 @@ extern crate rpassword;
 use ring::rand::SecureRandom;
 use ring::{aead, digest, error, pbkdf2, rand};
 use std::env;
-use std::fs::File;
-use std::io::{stdin, Error, ErrorKind, Read};
+use std::fs::{remove_file, rename, File};
+use std::io::{stdin, Error, ErrorKind, Read, Write};
 use std::num::NonZeroU32;
 
 fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, error::Unspecified> {
@@ -80,6 +80,7 @@ fn read_file(filename: &str) -> Result<Vec<u8>, Error> {
 enum Action {
     List,
     New,
+    Save,
     Quit,
     Unknown(String),
 }
@@ -90,6 +91,8 @@ impl Action {
             Action::List
         } else if description.eq_ignore_ascii_case("N") {
             Action::New
+        } else if description.eq_ignore_ascii_case("S") {
+            Action::Save
         } else if description.eq_ignore_ascii_case("Q") {
             Action::Quit
         } else {
@@ -109,7 +112,9 @@ fn add_entry(entries: &mut Vec<String>) -> Result<(), Error> {
 }
 
 fn prompt_for_action() -> Result<Action, Error> {
-    Ok(Action::from_description(prompt("(L)ist (N)ew (Q)uit?")?))
+    Ok(Action::from_description(prompt(
+        "(L)ist (N)ew (S)ave (Q)uit?",
+    )?))
 }
 
 fn prompt(prompt_string: &str) -> Result<String, Error> {
@@ -120,6 +125,35 @@ fn prompt(prompt_string: &str) -> Result<String, Error> {
         .pop()
         .ok_or(Error::new(ErrorKind::Other, "no newline?"))?; // remove newline
     Ok(input)
+}
+
+fn save_entries(
+    entries: &[String],
+    key: &[u8; digest::SHA256_OUTPUT_LEN],
+    db_filename: &str,
+) -> Result<(), Error> {
+    let serialized = entries.join("\n");
+    let encrypted =
+        encrypt(key, serialized.as_bytes()).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let mut backup_filename = db_filename.to_owned();
+    backup_filename.push_str(".bak");
+    rename(db_filename, &backup_filename)?;
+    {
+        let mut new_db = File::create(db_filename)?;
+        new_db.write_all(&encrypted)?;
+    }
+    let new_db_contents = read_file(&db_filename)?;
+    if !new_db_contents.is_empty() {
+        let decrypted =
+            decrypt(key, &new_db_contents).map_err(|e| Error::new(ErrorKind::Other, e))?;
+        if decrypted != serialized.as_bytes() {
+            println!("something went wrong saving new contents - reverting to original");
+            rename(&backup_filename, db_filename)?;
+        } else {
+            remove_file(backup_filename)?;
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Error> {
@@ -141,6 +175,7 @@ fn main() -> Result<(), Error> {
         match prompt_for_action()? {
             Action::List => list_entries(&entries),
             Action::New => add_entry(&mut entries)?,
+            Action::Save => save_entries(&entries, &key, &db_filename)?,
             Action::Quit => {
                 println!("quitting...");
                 break;
