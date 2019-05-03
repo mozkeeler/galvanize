@@ -98,14 +98,28 @@ impl Action {
     }
 }
 
-fn prompt() -> Result<Action, Error> {
-    println!("(L)ist (N)ew (Q)uit?");
+fn list_entries(entries: &[String]) {
+    for (i, entry) in entries.iter().enumerate() {
+        println!("{}: {}", i, entry);
+    }
+}
+
+fn add_entry(entries: &mut Vec<String>) -> Result<(), Error> {
+    Ok(entries.push(prompt("New entry")?))
+}
+
+fn prompt_for_action() -> Result<Action, Error> {
+    Ok(Action::from_description(prompt("(L)ist (N)ew (Q)uit?")?))
+}
+
+fn prompt(prompt_string: &str) -> Result<String, Error> {
+    println!("{}", prompt_string);
     let mut input = String::new();
     let _ = stdin().read_line(&mut input)?;
     input
         .pop()
         .ok_or(Error::new(ErrorKind::Other, "no newline?"))?; // remove newline
-    Ok(Action::from_description(input))
+    Ok(input)
 }
 
 fn main() -> Result<(), Error> {
@@ -120,13 +134,13 @@ fn main() -> Result<(), Error> {
         let decrypted = decrypt(&key, &db_contents).map_err(|e| Error::new(ErrorKind::Other, e))?;
         let as_utf8 = String::from_utf8(decrypted).map_err(|e| Error::new(ErrorKind::Other, e))?;
         for line in as_utf8.lines() {
-            entries.push(line.to_owned());
+            entries.push(line.trim().to_owned());
         }
     }
     loop {
-        match prompt()? {
-            Action::List => println!("listing..."),
-            Action::New => println!("new..."),
+        match prompt_for_action()? {
+            Action::List => list_entries(&entries),
+            Action::New => add_entry(&mut entries)?,
             Action::Quit => {
                 println!("quitting...");
                 break;
