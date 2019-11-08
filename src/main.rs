@@ -78,6 +78,7 @@ fn read_file(filename: &str) -> Result<Vec<u8>, Error> {
 }
 
 enum Action {
+    Find,
     List,
     New,
     Delete,
@@ -88,7 +89,9 @@ enum Action {
 
 impl Action {
     fn from_description(description: String) -> Action {
-        if description.eq_ignore_ascii_case("L") {
+        if description.eq_ignore_ascii_case("F") {
+            Action::Find
+        } else if description.eq_ignore_ascii_case("L") {
             Action::List
         } else if description.eq_ignore_ascii_case("N") {
             Action::New
@@ -102,6 +105,16 @@ impl Action {
             Action::Unknown(description)
         }
     }
+}
+
+fn find_entries(entries: &[String]) -> Result<(), Error> {
+    let term = prompt("Find")?;
+    for (i, entry) in entries.iter().enumerate() {
+        if entry.to_lowercase().find(&term.to_lowercase()).is_some() {
+            println!("{}: {}", i, entry);
+        }
+    }
+    Ok(())
 }
 
 fn list_entries(entries: &[String]) {
@@ -134,7 +147,7 @@ fn select_and_delete_entry(entries: &mut Vec<String>) -> Result<(), Error> {
 
 fn prompt_for_action() -> Result<Action, Error> {
     Ok(Action::from_description(prompt(
-        "(L)ist (N)ew (D)elete (S)ave (Q)uit?",
+        "(F)ind (L)ist (N)ew (D)elete (S)ave (Q)uit?",
     )?))
 }
 
@@ -195,6 +208,7 @@ fn main() -> Result<(), Error> {
     }
     loop {
         match prompt_for_action()? {
+            Action::Find => find_entries(&entries)?,
             Action::List => list_entries(&entries),
             Action::New => add_entry(&mut entries)?,
             Action::Delete => select_and_delete_entry(&mut entries)?,
